@@ -1,4 +1,7 @@
-// Bandwidth Controller - Frontend Application Logic
+// Bandwidth Controller - Frontend Application Logic (Unified Web & Android Bridge)
+
+// Detect Environment
+const isAndroid = typeof window.Android !== 'undefined';
 
 // Application State
 let currentUnit = 'MB'; // 'KB' or 'MB'
@@ -221,24 +224,36 @@ async function applyLimit() {
     btnApply.disabled = true;
     btnApply.style.opacity = '0.7';
     try {
-        const response = await fetch('/api/apply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                limit_kb: currentKbValue,
-                unit: currentUnit
-            })
-        });
-        const data = await response.json();
-        if (data.success) {
-            isLimitActive = true;
-            updateStatusUI(data.state);
-            showToast('Bandwidth limit applied successfully.', 'success');
+        if (isAndroid) {
+            const resStr = window.Android.applyLimit(currentKbValue, currentUnit);
+            const data = JSON.parse(resStr);
+            if (data.success) {
+                isLimitActive = true;
+                updateStatusUI(data.state);
+                showToast('Bandwidth limit applied successfully.', 'success');
+            } else {
+                showToast(data.message || 'Failed to apply limit.', 'error');
+            }
         } else {
-            showToast(data.message || 'Failed to apply limit. Check Administrator privileges.', 'error');
+            const response = await fetch('/api/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    limit_kb: currentKbValue,
+                    unit: currentUnit
+                })
+            });
+            const data = await response.json();
+            if (data.success) {
+                isLimitActive = true;
+                updateStatusUI(data.state);
+                showToast('Bandwidth limit applied successfully.', 'success');
+            } else {
+                showToast(data.message || 'Failed to apply limit.', 'error');
+            }
         }
     } catch (err) {
-        showToast('Error communicating with backend service.', 'error');
+        showToast('Error applying bandwidth limit.', 'error');
     } finally {
         btnApply.disabled = false;
         btnApply.style.opacity = '1';
@@ -249,16 +264,26 @@ async function disableLimit() {
     btnDisable.disabled = true;
     btnDisable.style.opacity = '0.7';
     try {
-        const response = await fetch('/api/disable', {
-            method: 'POST'
-        });
-        const data = await response.json();
-        if (data.success) {
-            isLimitActive = false;
-            updateStatusUI(data.state);
-            showToast('Bandwidth limit removed. Traffic is unrestricted.', 'success');
+        if (isAndroid) {
+            const resStr = window.Android.disableLimit();
+            const data = JSON.parse(resStr);
+            if (data.success) {
+                isLimitActive = false;
+                updateStatusUI(data.state);
+                showToast('Bandwidth limit removed. Traffic is unrestricted.', 'success');
+            } else {
+                showToast(data.message || 'Error removing bandwidth limit', 'error');
+            }
         } else {
-            showToast(data.message || 'Error removing bandwidth limit', 'error');
+            const response = await fetch('/api/disable', { method: 'POST' });
+            const data = await response.json();
+            if (data.success) {
+                isLimitActive = false;
+                updateStatusUI(data.state);
+                showToast('Bandwidth limit removed. Traffic is unrestricted.', 'success');
+            } else {
+                showToast(data.message || 'Error removing bandwidth limit', 'error');
+            }
         }
     } catch (err) {
         showToast('Error communicating with backend service.', 'error');
@@ -281,10 +306,10 @@ function updateStatusUI(state) {
 
     if (state.is_admin) {
         adminDot.className = 'status-dot dot-green';
-        adminText.textContent = 'Administrator: Active';
+        adminText.textContent = isAndroid ? 'Android VpnService: Ready' : 'Administrator: Active';
     } else {
         adminDot.className = 'status-dot dot-yellow';
-        adminText.textContent = 'Admin Rights Required';
+        adminText.textContent = isAndroid ? 'VPN Permission Required' : 'Admin Rights Required';
     }
 
     if (state.enabled && state.limit_kb > 0) {
@@ -306,13 +331,22 @@ function updateStatusUI(state) {
 // Polling telemetry
 async function pollTelemetry() {
     try {
-        const res = await fetch('/api/stats');
-        if (res.ok) {
-            const data = await res.json();
-            document.getElementById('cur-download-mb').textContent = data.download_mb.toFixed(2);
-            document.getElementById('cur-download-kb').textContent = data.download_kb.toFixed(1);
-            document.getElementById('cur-upload-mb').textContent = data.upload_mb.toFixed(2);
-            document.getElementById('cur-upload-kb').textContent = data.upload_kb.toFixed(1);
+        let data;
+        if (isAndroid) {
+            const statsStr = window.Android.getStats();
+            data = JSON.parse(statsStr);
+        } else {
+            const res = await fetch('/api/stats');
+            if (res.ok) {
+                data = await res.json();
+            }
+        }
+
+        if (data) {
+            document.getElementById('cur-download-mb').textContent = Number(data.download_mb).toFixed(2);
+            document.getElementById('cur-download-kb').textContent = Number(data.download_kb).toFixed(1);
+            document.getElementById('cur-upload-mb').textContent = Number(data.upload_mb).toFixed(2);
+            document.getElementById('cur-upload-kb').textContent = Number(data.upload_kb).toFixed(1);
 
             document.getElementById('total-download-gb').textContent = `${data.total_gb_recv} GB`;
             document.getElementById('total-upload-gb').textContent = `${data.total_gb_sent} GB`;
@@ -322,22 +356,31 @@ async function pollTelemetry() {
             }
 
             dlHistory.shift();
-            dlHistory.push(data.download_mb);
+            dlHistory.push(Number(data.download_mb));
             ulHistory.shift();
-            ulHistory.push(data.upload_mb);
+            ulHistory.push(Number(data.upload_mb));
             drawWaveform();
         }
     } catch (e) {
-        // Backend offline / restarting
+        // Backend offline / waiting
     }
 }
 
 // Initial status fetch
 async function initStatus() {
     try {
-        const res = await fetch('/api/status');
-        if (res.ok) {
-            const state = await res.json();
+        let state;
+        if (isAndroid) {
+            const statusStr = window.Android.getStatus();
+            state = JSON.parse(statusStr);
+        } else {
+            const res = await fetch('/api/status');
+            if (res.ok) {
+                state = await res.json();
+            }
+        }
+
+        if (state) {
             if (state.enabled && state.limit_kb > 0) {
                 currentKbValue = state.limit_kb;
                 currentUnit = state.unit || 'MB';

@@ -10,3 +10,6 @@ The application runs on random local port: **http://127.0.0.1:9482**
 
 ## Instructions
 Run BandwidthController.exe located in the dist folder, or start main.py with Python. The web browser will automatically open http://127.0.0.1:9482 once launched.
+
+## Android APK Support
+Android mobile app is located in the android directory and uses Android VpnService to pace network throughput. Automatic APK builds are published via GitHub Actions under Releases.
