@@ -3,11 +3,46 @@ import json
 import os
 import sys
 import ctypes
+import tempfile
 from datetime import datetime
 
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 POLICY_DEFAULT = "GlobalBandwidthLimitDefault"
 POLICY_APP = "GlobalBandwidthLimitApp"
+
+def get_state_file_path() -> str:
+    """Return a guaranteed safe, writable path for state.json."""
+    candidates = []
+    app_data = os.environ.get("LOCALAPPDATA")
+    if app_data:
+        candidates.append(os.path.join(app_data, "BandwidthController", "state.json"))
+    home = os.path.expanduser("~")
+    if home:
+        candidates.append(os.path.join(home, ".bandwidth_controller", "state.json"))
+    candidates.append(os.path.join(tempfile.gettempdir(), "bandwidth_state.json"))
+
+    for path in candidates:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            test_file = path + ".tmp"
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(test_file)
+            return path
+        except Exception:
+            continue
+    return os.path.join(tempfile.gettempdir(), "bandwidth_state.json")
+
+# In-memory state cache
+_in_memory_state = {
+    "enabled": False,
+    "limit_kb": 0.0,
+    "limit_mb": 0.0,
+    "unit": "MB",
+    "bps": 0,
+    "applied_at": None,
+    "is_admin": False,
+    "error": None,
+}
 
 def is_admin() -> bool:
     """Check if the current process has Administrator privileges on Windows."""
@@ -53,35 +88,34 @@ def run_powershell(command: str):
     except Exception as e:
         return False, "", str(e)
 
-def load_state():
-    """Load the current throttle state from disk."""
-    default_state = {
-        "enabled": False,
-        "limit_kb": 0.0,
-        "limit_mb": 0.0,
-        "unit": "MB",
-        "bps": 0,
-        "applied_at": None,
-        "is_admin": is_admin(),
-        "error": None,
-    }
-    if os.path.exists(STATE_FILE):
+def load_state() -> dict:
+    """Load the current throttle state from disk or memory."""
+    global _in_memory_state
+    state_file = get_state_file_path()
+    if os.path.exists(state_file):
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+            with open(state_file, "r", encoding="utf-8") as f:
                 saved = json.load(f)
                 saved["is_admin"] = is_admin()
-                return saved
+                _in_memory_state.update(saved)
+                return _in_memory_state
         except Exception:
-            return default_state
-    return default_state
+            pass
+            
+    _in_memory_state["is_admin"] = is_admin()
+    return _in_memory_state
 
 def save_state(state: dict):
-    """Save the throttle state to disk."""
+    """Save the throttle state to disk and memory."""
+    global _in_memory_state
+    _in_memory_state.update(state)
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
+        state_file = get_state_file_path()
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        with open(state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
     except Exception as e:
-        print(f"Error saving state: {e}")
+        print(f"Warning: Could not persist state to file: {e}")
 
 def apply_limit(limit_kb: float, unit: str = "MB") -> dict:
     """
@@ -98,11 +132,13 @@ def apply_limit(limit_kb: float, unit: str = "MB") -> dict:
 
     ps_script = f"""
     try {{
-        Remove-NetQosPolicy -Name "{POLICY_DEFAULT}" -Confirm:$false -PolicyStore ActiveStore -ErrorAction SilentlyContinue
-        Remove-NetQosPolicy -Name "{POLICY_APP}" -Confirm:$false -PolicyStore ActiveStore -ErrorAction SilentlyContinue
+        Remove-NetQosPolicy -Name "{POLICY_DEFAULT}" -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-NetQosPolicy -Name "{POLICY_APP}" -Confirm:$false -ErrorAction SilentlyContinue
         
-        New-NetQosPolicy -Name "{POLICY_DEFAULT}" -Default -ThrottleRateActionBitsPerSecond {bps} -PolicyStore ActiveStore -ErrorAction Stop
-        New-NetQosPolicy -Name "{POLICY_APP}" -AppPathNameMatchCondition "*" -ThrottleRateActionBitsPerSecond {bps} -PolicyStore ActiveStore -ErrorAction Stop
+        New-NetQosPolicy -Name "{POLICY_DEFAULT}" -Default -ThrottleRateActionBitsPerSecond {bps} -ErrorAction Stop
+        try {{
+            New-NetQosPolicy -Name "{POLICY_APP}" -AppPathNameMatchCondition "*" -ThrottleRateActionBitsPerSecond {bps} -ErrorAction SilentlyContinue
+        }} catch {{}}
         Write-Output "SUCCESS"
     }} catch {{
         Write-Error $_.Exception.Message
@@ -139,8 +175,8 @@ def remove_limit() -> dict:
     admin = is_admin()
     ps_script = f"""
     try {{
-        Remove-NetQosPolicy -Name "{POLICY_DEFAULT}" -Confirm:$false -PolicyStore ActiveStore -ErrorAction SilentlyContinue
-        Remove-NetQosPolicy -Name "{POLICY_APP}" -Confirm:$false -PolicyStore ActiveStore -ErrorAction SilentlyContinue
+        Remove-NetQosPolicy -Name "{POLICY_DEFAULT}" -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-NetQosPolicy -Name "{POLICY_APP}" -Confirm:$false -ErrorAction SilentlyContinue
         Write-Output "SUCCESS"
     }} catch {{
         Write-Error $_.Exception.Message
