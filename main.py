@@ -5,6 +5,8 @@ import webbrowser
 import threading
 import subprocess
 import ctypes
+import atexit
+import asyncio
 
 def is_admin() -> bool:
     """Check if the script is executing with Administrator privileges."""
@@ -17,11 +19,9 @@ def elevate():
     """Relaunches the application as Administrator via Windows UAC."""
     try:
         if getattr(sys, 'frozen', False):
-            # Running as compiled EXE
             exe = sys.executable
             args = ""
         else:
-            # Running as python script
             exe = sys.executable
             args = f'"{os.path.abspath(__file__)}"'
             
@@ -74,12 +74,22 @@ def print_banner():
     """
     print(banner)
 
+def run_proxy_loop():
+    """Run the asyncio event loop for the proxy rate shaper server."""
+    from backend.proxy_shaper import start_proxy_server
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(start_proxy_server())
+    except Exception as e:
+        print(f"[-] Proxy shaper loop error: {e}")
+
 def main():
     print_banner()
 
     # If running directly and not admin, prompt for UAC elevation
     if not is_admin():
-        print("[!] Administrator privileges required for Windows QoS bandwidth throttling.")
+        print("[!] Administrator privileges required for Windows network bandwidth control.")
         print("[*] Requesting UAC Administrator permission...")
         elevate()
         return
@@ -87,16 +97,25 @@ def main():
     # Check and install requirements if missing
     check_requirements()
 
-    import uvicorn
+    # Import modules after requirement check
+    from backend.proxy_shaper import disable_proxy_throttle
     from backend.app import app
+    import uvicorn
+
+    # Register exit cleanup to ensure system proxy is disabled when closed
+    atexit.register(disable_proxy_throttle)
+
+    # Start background proxy rate shaper thread
+    proxy_thread = threading.Thread(target=run_proxy_loop, daemon=True)
+    proxy_thread.start()
 
     host = "127.0.0.1"
     port = 9482
     url = f"http://{host}:{port}"
 
     print(f"[+] Administrator mode verified: Active (Granted)")
-    print(f"[+] Local Server listening on: {url}")
-    print(f"[+] Windows NetQos Engine: Initialized")
+    print(f"[+] Local Web Controller on: {url}")
+    print(f"[+] Hard Rate-Limiting Engine: Active")
     print("------------------------------------------------------------------------")
     print("Press Ctrl+C in this console window anytime to stop the server.")
     print("------------------------------------------------------------------------")
@@ -105,7 +124,10 @@ def main():
     threading.Thread(target=open_browser_delayed, args=(url,), daemon=True).start()
 
     # Run Uvicorn server
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    finally:
+        disable_proxy_throttle()
 
 if __name__ == "__main__":
     main()
