@@ -91,7 +91,7 @@ def main():
     from backend.app import app
 
     host = "127.0.0.1"
-    port = 8765
+    port = 9482
     url = f"http://{host}:{port}"
 
     print(f"[+] Administrator mode verified: Active (Granted)")
