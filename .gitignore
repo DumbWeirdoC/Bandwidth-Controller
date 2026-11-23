@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# Build artifacts
+build/
+*.egg-info/
+
+# State files
+backend/state.json
+
+dist/
