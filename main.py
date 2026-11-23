@@ -7,6 +7,7 @@ import subprocess
 import ctypes
 import atexit
 import asyncio
+import signal
 
 def is_admin() -> bool:
     """Check if the script is executing with Administrator privileges."""
@@ -84,6 +85,10 @@ def run_proxy_loop():
     except Exception as e:
         print(f"[-] Proxy shaper loop error: {e}")
 
+def cleanup():
+    from backend.proxy_shaper import disable_proxy_throttle
+    disable_proxy_throttle()
+
 def main():
     print_banner()
 
@@ -97,17 +102,20 @@ def main():
     # Check and install requirements if missing
     check_requirements()
 
-    # Import modules after requirement check
-    from backend.proxy_shaper import disable_proxy_throttle
-    from backend.app import app
-    import uvicorn
-
-    # Register exit cleanup to ensure system proxy is disabled when closed
-    atexit.register(disable_proxy_throttle)
+    # Register exit and signal cleanup
+    atexit.register(cleanup)
+    try:
+        signal.signal(signal.SIGINT, lambda s, f: (cleanup(), sys.exit(0)))
+        signal.signal(signal.SIGTERM, lambda s, f: (cleanup(), sys.exit(0)))
+    except Exception:
+        pass
 
     # Start background proxy rate shaper thread
     proxy_thread = threading.Thread(target=run_proxy_loop, daemon=True)
     proxy_thread.start()
+
+    from backend.app import app
+    import uvicorn
 
     host = "127.0.0.1"
     port = 9482
@@ -127,7 +135,7 @@ def main():
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     finally:
-        disable_proxy_throttle()
+        cleanup()
 
 if __name__ == "__main__":
     main()
