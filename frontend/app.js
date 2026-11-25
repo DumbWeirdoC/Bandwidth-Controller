@@ -1,12 +1,8 @@
-// Bandwidth Controller - Frontend Application Logic (Unified Web & Android Bridge)
-
-// Detect Environment
-const isAndroid = typeof window.Android !== 'undefined';
+// Bandwidth Controller - Frontend Application Logic
 
 // Application State
 let currentUnit = 'MB'; // 'KB' or 'MB'
 let currentKbValue = 10240; // 10 MB in KB
-let isSystemAdmin = false;
 let isLimitActive = false;
 
 // Real-time chart data buffers (60 data points)
@@ -38,6 +34,14 @@ const toastContainer = document.getElementById('toast-container');
 const ctx = trafficCanvas.getContext('2d');
 
 // --- Unit and Scale Management ---
+function updateSliderVisualFill() {
+    const min = parseFloat(slider.min) || 0;
+    const max = parseFloat(slider.max) || 200;
+    const val = parseFloat(slider.value) || 0;
+    const pct = max > min ? ((val - min) / (max - min)) * 100 : 0;
+    slider.style.background = `linear-gradient(to right, #00f2fe 0%, #10b981 ${pct}%, rgba(255, 255, 255, 0.08) ${pct}%)`;
+}
+
 function updateSliderScale() {
     if (currentUnit === 'MB') {
         slider.min = '0';
@@ -46,7 +50,7 @@ function updateSliderScale() {
         exactInput.min = '0';
         exactInput.max = '200';
         exactInput.step = '0.5';
-        
+
         const mbVal = currentKbValue / 1024.0;
         slider.value = mbVal.toFixed(1);
         exactInput.value = mbVal.toFixed(1);
@@ -82,6 +86,7 @@ function updateSliderScale() {
     }
     renderReadout();
     updatePresetHighlight();
+    updateSliderVisualFill();
 }
 
 function renderReadout() {
@@ -133,6 +138,7 @@ slider.addEventListener('input', (e) => {
     }
     renderReadout();
     updatePresetHighlight();
+    updateSliderVisualFill();
 });
 
 // Numeric input
@@ -150,6 +156,7 @@ exactInput.addEventListener('input', (e) => {
     }
     renderReadout();
     updatePresetHighlight();
+    updateSliderVisualFill();
 });
 
 // Stepper buttons (+/-)
@@ -160,13 +167,14 @@ btnStepUp.addEventListener('click', () => {
         currentKbValue = v * 1024.0;
         exactInput.value = v;
     } else {
-        let v = Math.min(parseInt(slider.value, 10) + 1024, 204800);
+        let v = Math.min(parseInt(slider.value, 10) + 100, 204800);
         slider.value = v;
         currentKbValue = v;
         exactInput.value = v;
     }
     renderReadout();
     updatePresetHighlight();
+    updateSliderVisualFill();
 });
 
 btnStepDown.addEventListener('click', () => {
@@ -176,13 +184,14 @@ btnStepDown.addEventListener('click', () => {
         currentKbValue = v * 1024.0;
         exactInput.value = v;
     } else {
-        let v = Math.max(parseInt(slider.value, 10) - 1024, 0);
+        let v = Math.max(parseInt(slider.value, 10) - 100, 0);
         slider.value = v;
         currentKbValue = v;
         exactInput.value = v;
     }
     renderReadout();
     updatePresetHighlight();
+    updateSliderVisualFill();
 });
 
 // Preset Chips Click
@@ -200,6 +209,7 @@ presetChips.forEach(chip => {
         }
         renderReadout();
         updatePresetHighlight();
+        updateSliderVisualFill();
     });
 });
 
@@ -207,7 +217,7 @@ presetChips.forEach(chip => {
 function showToast(message, type = 'success') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    const icon = type === 'success' 
+    const icon = type === 'success'
         ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>'
         : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
     toast.innerHTML = `${icon}<span>${message}</span>`;
@@ -224,36 +234,24 @@ async function applyLimit() {
     btnApply.disabled = true;
     btnApply.style.opacity = '0.7';
     try {
-        if (isAndroid) {
-            const resStr = window.Android.applyLimit(currentKbValue, currentUnit);
-            const data = JSON.parse(resStr);
-            if (data.success) {
-                isLimitActive = true;
-                updateStatusUI(data.state);
-                showToast('Bandwidth limit applied successfully.', 'success');
-            } else {
-                showToast(data.message || 'Failed to apply limit.', 'error');
-            }
+        const response = await fetch('/api/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                limit_kb: currentKbValue,
+                unit: currentUnit
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            isLimitActive = Boolean(data.state && data.state.enabled);
+            updateStatusUI(data.state);
+            showToast(data.message || 'Bandwidth limit applied successfully.', 'success');
         } else {
-            const response = await fetch('/api/apply', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    limit_kb: currentKbValue,
-                    unit: currentUnit
-                })
-            });
-            const data = await response.json();
-            if (data.success) {
-                isLimitActive = true;
-                updateStatusUI(data.state);
-                showToast('Bandwidth limit applied successfully.', 'success');
-            } else {
-                showToast(data.message || 'Failed to apply limit.', 'error');
-            }
+            showToast(data.message || 'Failed to apply limit.', 'error');
         }
     } catch (err) {
-        showToast('Error applying bandwidth limit.', 'error');
+        showToast('Error communicating with backend service.', 'error');
     } finally {
         btnApply.disabled = false;
         btnApply.style.opacity = '1';
@@ -264,26 +262,14 @@ async function disableLimit() {
     btnDisable.disabled = true;
     btnDisable.style.opacity = '0.7';
     try {
-        if (isAndroid) {
-            const resStr = window.Android.disableLimit();
-            const data = JSON.parse(resStr);
-            if (data.success) {
-                isLimitActive = false;
-                updateStatusUI(data.state);
-                showToast('Bandwidth limit removed. Traffic is unrestricted.', 'success');
-            } else {
-                showToast(data.message || 'Error removing bandwidth limit', 'error');
-            }
+        const response = await fetch('/api/disable', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            isLimitActive = false;
+            updateStatusUI(data.state);
+            showToast('Bandwidth limit removed. Traffic is unrestricted.', 'success');
         } else {
-            const response = await fetch('/api/disable', { method: 'POST' });
-            const data = await response.json();
-            if (data.success) {
-                isLimitActive = false;
-                updateStatusUI(data.state);
-                showToast('Bandwidth limit removed. Traffic is unrestricted.', 'success');
-            } else {
-                showToast(data.message || 'Error removing bandwidth limit', 'error');
-            }
+            showToast(data.message || 'Error removing bandwidth limit', 'error');
         }
     } catch (err) {
         showToast('Error communicating with backend service.', 'error');
@@ -306,16 +292,16 @@ function updateStatusUI(state) {
 
     if (state.is_admin) {
         adminDot.className = 'status-dot dot-green';
-        adminText.textContent = isAndroid ? 'Android VpnService: Ready' : 'Administrator: Active';
+        adminText.textContent = 'Administrator: Active';
     } else {
         adminDot.className = 'status-dot dot-yellow';
-        adminText.textContent = isAndroid ? 'VPN Permission Required' : 'Admin Rights Required';
+        adminText.textContent = 'Admin Rights Required';
     }
 
     if (state.enabled && state.limit_kb > 0) {
         statusBadge.className = 'state-badge state-active';
         statusBadge.textContent = 'Active (Throttled)';
-        const valStr = state.unit === 'MB' 
+        const valStr = state.unit === 'MB'
             ? `${state.limit_mb} MB/s (${Math.round(state.limit_kb).toLocaleString()} KB/s)`
             : `${Math.round(state.limit_kb).toLocaleString()} KB/s (${state.limit_mb} MB/s)`;
         activeText.textContent = `Throttle Active: ${valStr}`;
@@ -331,18 +317,9 @@ function updateStatusUI(state) {
 // Polling telemetry
 async function pollTelemetry() {
     try {
-        let data;
-        if (isAndroid) {
-            const statsStr = window.Android.getStats();
-            data = JSON.parse(statsStr);
-        } else {
-            const res = await fetch('/api/stats');
-            if (res.ok) {
-                data = await res.json();
-            }
-        }
-
-        if (data) {
+        const res = await fetch('/api/stats');
+        if (res.ok) {
+            const data = await res.json();
             document.getElementById('cur-download-mb').textContent = Number(data.download_mb).toFixed(2);
             document.getElementById('cur-download-kb').textContent = Number(data.download_kb).toFixed(1);
             document.getElementById('cur-upload-mb').textContent = Number(data.upload_mb).toFixed(2);
@@ -369,18 +346,9 @@ async function pollTelemetry() {
 // Initial status fetch
 async function initStatus() {
     try {
-        let state;
-        if (isAndroid) {
-            const statusStr = window.Android.getStatus();
-            state = JSON.parse(statusStr);
-        } else {
-            const res = await fetch('/api/status');
-            if (res.ok) {
-                state = await res.json();
-            }
-        }
-
-        if (state) {
+        const res = await fetch('/api/status');
+        if (res.ok) {
+            const state = await res.json();
             if (state.enabled && state.limit_kb > 0) {
                 currentKbValue = state.limit_kb;
                 currentUnit = state.unit || 'MB';
