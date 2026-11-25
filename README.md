@@ -46,3 +46,11 @@ Or double-click `install_and_run.bat` to install dependencies and start the serv
 - `backend/throttle_engine.py` — Coordinated throttle state and Windows `NetQosPolicy` engine
 - `backend/network_monitor.py` — Physical NIC telemetry monitor using `psutil`
 - `frontend/` — Dark glassmorphism web interface (`index.html`, `style.css`, `app.js`)
+
+## Android Application (All Apps or Per-App Control)
+
+An Android WebView + `VpnService` application is included in `android/` with the same UI:
+
+- **All Apps Mode:** Applies the bandwidth limit across applications on the device.
+- **Selected Apps Mode:** Pick specific installed applications from a searchable list to throttle only those apps (`VpnService.Builder.addAllowedApplication`), leaving all other apps at full speed.
+- **APK Releases:** Automatically compiled via GitHub Actions (`.github/workflows/build-apk.yml`) and published under **GitHub Releases** (`v1.0.0-android`).
